@@ -46,7 +46,23 @@ var page_buttons = {
 };
 
 var PAGE_SIZE_KEY = 'countess-web.pageSize';
-var preview = { node: null, offset: 0, limit: 100, total: null, truncated: false, rows: 0, request: 0 };
+var preview = { node: null, offset: 0, limit: 100, total: null, truncated: false, rows: 0, request: 0,
+                data: { columns: [], rows: [] } };
+
+/* Selecting cells copies them as CSV; say so briefly in the pane header. */
+var copy_status = document.getElementById('copy-status');
+var copy_status_timer = 0;
+var cell_selection = attachCellSelection(view_container, {
+    getData: () => preview.data,
+    onCopied: info => {
+        var what = info.rows == 1 && info.columns == 1 ? '1 cell'
+            : plural(info.rows, 'row') + ' \u00d7 ' + plural(info.columns, 'column');
+        copy_status.textContent = info.ok ? 'Copied ' + what + ' as CSV' : 'Couldn\u2019t copy to the clipboard';
+        copy_status.classList.add('is-shown');
+        clearTimeout(copy_status_timer);
+        copy_status_timer = setTimeout(() => copy_status.classList.remove('is-shown'), 2500);
+    },
+});
 
 try {
     var stored_size = parseInt(localStorage.getItem(PAGE_SIZE_KEY), 10);
@@ -62,6 +78,8 @@ function plural(n, word) { return fmt(n) + ' ' + word + (n == 1 ? '' : 's'); }
 var NUMERIC_TYPE = /^(TINYINT|SMALLINT|INTEGER|BIGINT|HUGEINT|UTINYINT|USMALLINT|UINTEGER|UBIGINT|UHUGEINT|FLOAT|DOUBLE|REAL|DECIMAL)/i;
 
 function showPreviewMessage(text, is_error) {
+    preview.data = { columns: [], rows: [] };
+    cell_selection.reset();
     var p = document.createElement('p');
     p.className = 'preview-message' + (is_error ? ' is-error' : '');
     p.textContent = text;
@@ -161,6 +179,8 @@ function renderPreview(json) {
         td.className = 'null';
         td.textContent = 'No rows.';
     }
+    preview.data = { columns: columns, rows: rows };
+    cell_selection.reset();
     view_container.replaceChildren(table);
     view_container.classList.remove('is-loading');
     updatePager();
@@ -220,6 +240,7 @@ var plugin_list = fetch('plugins').then(r => {
     if (!r.ok) throw new Error('The server returned ' + r.status + ' ' + r.statusText + '.');
     return r.json();
 });
+plugin_list.catch(() => {});   // reported when the list is shown
 var plugin_filter = '';
 var choosing = false;   // a plugin choice is on its way to the server
 
@@ -471,6 +492,8 @@ function clearSelection() {
     name_row.hidden = true;
     preview.node = null;
     preview.request++;
+    preview.data = { columns: [], rows: [] };
+    cell_selection.reset();
     view_container.replaceChildren();
     view_container.classList.remove('is-loading');
     view_status.textContent = '';

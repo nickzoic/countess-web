@@ -16,6 +16,7 @@
   --text:      #1f2745;
   --muted:     #5b6488;
   --accent:    #0c9c84;   /* same as the DAG editor's selected colour */
+  --accent-text: #08705f; /* the accent, dark enough for small text */
   --row-alt:   #f4f6fb;
   --gap:       8px;
   --radius:    6px;
@@ -33,6 +34,7 @@
     --text:     #c8d0f0;
     --muted:    #8790b3;
     --accent:   #2ee8c0;
+    --accent-text: #2ee8c0;
     --row-alt:  #1a2030;
   }
 }
@@ -238,6 +240,32 @@ body.is-resizing-y, body.is-resizing-y * { cursor: row-resize !important; user-s
 .preview-table .num { text-align: right; }
 .preview-table .null { color: var(--muted); font-style: italic; }
 
+/* Cell selection: our own highlight and outline, not the browser's text selection. */
+.preview-table { user-select: none; -webkit-user-select: none; }
+.preview-table td { cursor: cell; }
+.preview-table th { cursor: s-resize; }
+.preview-table tbody tr td.is-selected { background: color-mix(in srgb, var(--accent) 16%, var(--surface)); }
+.preview-table th.is-selected { background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }
+.cell-selection {
+  position: absolute;
+  pointer-events: none;
+  border: 2px solid var(--accent);
+  border-radius: 2px;
+  margin: -1px 0 0 -1px;
+}
+.cell-selection[hidden] { display: none; }
+#view-container:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.copy-status {
+  flex: none;
+  font-size: 13px;
+  color: var(--accent-text);
+  opacity: 0;
+  transition: opacity .2s;
+}
+.copy-status.is-shown { opacity: 1; }
+.pane-subject + .copy-status { margin-right: 4px; }
+
 .preview-message { padding: 16px; margin: 0; color: var(--muted); }
 .preview-message.is-error { color: #c62828; }
 @media (prefers-color-scheme: dark) { .preview-message.is-error { color: #ff7b72; } }
@@ -418,5 +446,5 @@ body.is-resizing-y, body.is-resizing-y * { cursor: row-resize !important; user-s
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .splitter::after, #view-container.is-loading { transition: none; }
+  .splitter::after, #view-container.is-loading, .copy-status { transition: none; }
 }

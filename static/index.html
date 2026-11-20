@@ -59,9 +59,12 @@
     <header class="pane-head">
       <h2 class="pane-title" id="title-view">Preview</h2>
       <span class="pane-subject" id="view-status"></span>
+      <span class="copy-status" id="copy-status" role="status"></span>
       <button type="button" class="pane-max" aria-pressed="false" aria-label="Expand preview" title="Expand (Esc to restore)"></button>
     </header>
-    <div id="view-container" class="pane-body pane-scroll" data-empty="Select a node to preview its output."></div>
+    <div id="view-container" class="pane-body pane-scroll" tabindex="0"
+         aria-label="Preview table. Click or drag to select cells, double-click to select the page; selections are copied as CSV."
+         data-empty="Select a node to preview its output."></div>
     <footer class="pager" id="view-pager" hidden>
       <label class="pager-size">Rows per page
         <select id="page-size">
@@ -88,6 +91,7 @@
 </main>
 
 <script src="layout.js"> </script>
+<script src="preview-select.js"> </script>
 <script src="main.js"> </script>
 </body>
 </html>
