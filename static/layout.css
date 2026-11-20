@@ -242,6 +242,67 @@ body.is-resizing-y, body.is-resizing-y * { cursor: row-resize !important; user-s
 .preview-message.is-error { color: #c62828; }
 @media (prefers-color-scheme: dark) { .preview-message.is-error { color: #ff7b72; } }
 
+/* ── Preview pager ─────────────────────────────────────────────────────── */
+
+#view-container.is-loading { opacity: .55; transition: opacity .15s .1s; }
+
+.pager {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 16px;
+  min-height: var(--head-h);
+  padding: 4px 6px 4px 12px;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+  color: var(--muted);
+}
+.pager[hidden] { display: none; }
+
+.pager-range { flex: 1; min-width: max-content; font-variant-numeric: tabular-nums; }
+
+.pager-size, .pager-page { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.pager-page { padding: 0 4px; font-variant-numeric: tabular-nums; }
+
+.pager select,
+.pager input {
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 2px 4px;
+}
+.pager input { width: 6ch; text-align: right; -moz-appearance: textfield; }
+.pager input::-webkit-inner-spin-button,
+.pager input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+
+.pager-nav { display: flex; align-items: center; gap: 2px; }
+.pager-nav button {
+  width: 28px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+}
+.pager-nav button:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 8%, transparent); }
+.pager-nav button:disabled { color: var(--line); cursor: default; }
+.pager-nav svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+
+.pager select:focus-visible,
+.pager input:focus-visible,
+.pager-nav button:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+@media (max-width: 760px) {
+  .pager-size { display: none; }   /* keep the footer to one line on a phone */
+}
+
 /* ── One pane expanded, or a narrow screen ─────────────────────────────── */
 
 .workspace[data-max] {
@@ -272,5 +333,5 @@ body.is-resizing-y, body.is-resizing-y * { cursor: row-resize !important; user-s
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .splitter::after { transition: none; }
+  .splitter::after, #view-container.is-loading { transition: none; }
 }

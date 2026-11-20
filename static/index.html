@@ -57,6 +57,28 @@
       <button type="button" class="pane-max" aria-pressed="false" aria-label="Expand preview" title="Expand (Esc to restore)"></button>
     </header>
     <div id="view-container" class="pane-body pane-scroll" data-empty="Select a node to preview its output."></div>
+    <footer class="pager" id="view-pager" hidden>
+      <label class="pager-size">Rows per page
+        <select id="page-size">
+          <option>50</option>
+          <option selected>100</option>
+          <option>250</option>
+          <option>500</option>
+          <option>1000</option>
+        </select>
+      </label>
+      <span class="pager-range" id="page-range" aria-live="polite"></span>
+      <div class="pager-nav" role="group" aria-label="Pages">
+        <button type="button" id="page-first" aria-label="First page" title="First page"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 3v10M12 3 7 8l5 5"/></svg></button>
+        <button type="button" id="page-prev" aria-label="Previous page" title="Previous page"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3 5 8l5 5"/></svg></button>
+        <label class="pager-page">Page
+          <input type="number" id="page-number" min="1" value="1" inputmode="numeric">
+          <span id="page-count"></span>
+        </label>
+        <button type="button" id="page-next" aria-label="Next page" title="Next page"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m6 3 5 5-5 5"/></svg></button>
+        <button type="button" id="page-last" aria-label="Last page" title="Last page"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M12 3v10M4 3l5 5-5 5"/></svg></button>
+      </div>
+    </footer>
   </section>
 </main>
 

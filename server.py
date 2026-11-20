@@ -17,6 +17,9 @@ from countess.core.config import read_config
 graph = None
 ddbc = duckdb.connect()
 
+# Most rows a node is run with when previewing it.
+PREVIEW_ROW_LIMIT = 100000
+
 async def root_handler(request):
     """just returns the index page"""
     return web.FileResponse("./static/index.html")
@@ -100,17 +103,23 @@ async def view_handler(request):
     """Returns a preview of a table using 'ofs' and 'lim'
     parameters to restrict the number of rows"""
     node = graph.find_node_by_uuid(request.match_info['uuid'])
-    offset = int(request.query.get('ofs', 0))
-    limit = int(request.query.get('lim', 1000))
+    offset = max(0, int(request.query.get('ofs', 0)))
+    limit = min(max(1, int(request.query.get('lim', 1000))), 10000)
 
     def _view_query():
         cursor = ddbc.cursor()
-        node.run(cursor, row_limit=100000)
+        node.run(cursor, row_limit=PREVIEW_ROW_LIMIT)
         table = cursor.table(node.table_name)
+        total = table.aggregate("count(*)").fetchall()[0][0]
 
         return {
             "columns": list(zip(table.columns, [ str(t) for t in table.dtypes ])),
-            "data": table.limit(limit, offset=offset).fetchall()
+            "data": table.limit(limit, offset=offset).fetchall(),
+            "offset": offset,
+            "limit": limit,
+            "total": total,
+            # the node was run with a row limit, so there may be more rows than this
+            "truncated": total >= PREVIEW_ROW_LIMIT,
         }
 
     data = await asyncio.to_thread(_view_query)
