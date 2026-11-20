@@ -13,7 +13,7 @@ import webbrowser
 from aiohttp import web
 import duckdb
 
-from countess.core.config import read_config
+from countess.core.config import read_config, write_config
 from countess.core.pipeline import PipelineNode, PipelineNodeStatus
 from countess.core.plugins import get_plugin_classes
 
@@ -61,6 +61,7 @@ async def tree_handler(request):
     use by the dag editor component"""
     return web.json_response({
         "version": 3,
+        "filename": os.path.basename(args.filename),
         "nodes": [
             {
                 "id": n.uuid,
@@ -116,12 +117,48 @@ async def delete_handler(request):
     graph.del_node(node)
     return web.json_response(snapshot)
 
-async def move_handler(request):
-    """Move the position of the node"""
-    node = graph.find_node_by_uuid(request.match_info['uuid'])
-    node.position[0] = float(request.query['x']) * 1000
-    node.position[1] = float(request.query['y']) * 1000
+def set_positions(positions):
+    """Set node positions from {uuid: [x, y]}.  These are the DAG editor's
+    normalised positions (0 to 1 across the graph), which is also how
+    config files store them (times 1000)."""
+    for uuid, (x, y) in positions.items():
+        node = find_node(uuid)
+        if node:
+            node.position = (float(x), float(y))
+
+async def positions_handler(request):
+    """Move nodes: takes JSON {uuid: [x, y]}.  Moving one node can change
+    every node's normalised position, so they're sent together."""
+    set_positions(await request.json())
     return web.json_response("ok")
+
+async def save_handler(request):
+    """Write the graph back to the config file it was loaded from.
+    Takes JSON {positions: {uuid: [x, y]}} so the file has the nodes where
+    they are on screen.  Writes a temporary file and renames it over the
+    original, so a failed write can't leave a half-written config.
+    Returns the file name and every node's name (writing makes them
+    unique, which may change some)."""
+    data = await request.json()
+    set_positions(data.get("positions", {}))
+    filename = args.filename
+    temp_filename = os.path.join(os.path.dirname(os.path.abspath(filename)),
+                                 "." + os.path.basename(filename) + ".saving")
+    try:
+        write_config(graph, temp_filename)
+        os.replace(temp_filename, filename)
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logging.exception("saving %s", filename)
+        try:
+            os.remove(temp_filename)
+        except OSError:
+            pass
+        raise web.HTTPInternalServerError(text=f"Couldn't write {filename}: {exc}")
+    logging.info("saved %s", filename)
+    return web.json_response({
+        "filename": os.path.basename(filename),
+        "names": {n.uuid: n.name for n in graph.traverse_nodes()},
+    })
 
 async def edge_handler(request):
     """Add or remove an edge between nodes"""
@@ -362,7 +399,8 @@ async def main(args):
         web.post('/' + key + '/delete/{uuid}', delete_handler),
         web.get('/' + key + '/conf/{uuid}', conf_handler),
         web.post('/' + key + "/post/{uuid}", post_handler),
-        web.post('/' + key + '/move/{uuid1}', move_handler),
+        web.post('/' + key + '/positions', positions_handler),
+        web.post('/' + key + '/save', save_handler),
         web.post('/' + key + '/edge/{uuid1}/{uuid2}/{op}', edge_handler),
         web.get('/' + key + '/file/{path}', file_handler),
         web.get('/' + key + '/view/{uuid}', view_handler),

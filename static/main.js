@@ -11,8 +11,52 @@ var server_nodes = new Set();
 var needs_plugin = new Set();
 // The name the server has for each node, so renames can be spotted.
 var server_names = new Map();
+/* ── Unsaved changes ────────────────────────────────────────────────── */
+
+// Every request that changes the graph goes through changeFetch, which
+// counts it.  The config is unsaved while the count is past the count at
+// the last save.  Requests still on their way are kept so that a save can
+// wait for them.
+var changes = 0;
+var saved_changes = 0;
+var pending_changes = new Set();
+var file_name = '';
+
+function changeFetch(url, options) {
+    changes++;
+    updateSaveState();
+    var request = fetch(url, options);
+    pending_changes.add(request);
+    var forget = () => pending_changes.delete(request);
+    request.then(forget, forget);
+    return request;
+}
+
+function isUnsaved() { return changes > saved_changes; }
+
+var save_button = document.getElementById('save-button');
+var save_label = document.getElementById('save-label');
+var save_status = document.getElementById('save-status');
+var save_status_timer = 0;
+
+function updateSaveState() {
+    var unsaved = isUnsaved();
+    save_button.classList.toggle('is-dirty', unsaved);
+    save_label.textContent = unsaved ? 'Save' : 'Saved';
+    document.title = (unsaved ? '\u2022 ' : '') + (file_name ? file_name + ' \u2014 ' : '') + 'CountESS';
+}
+
+function showSaveStatus(text, is_error) {
+    clearTimeout(save_status_timer);
+    save_status.textContent = text;
+    save_status.classList.toggle('is-error', !!is_error);
+    if (!is_error) save_status_timer = setTimeout(() => { save_status.textContent = ''; }, 3000);
+}
+
 // The edges the server has, as 'from>to' node id pairs.
 var server_edges = new Set();
+// The position the server has for each node, as the editor's normalised [x, y].
+var server_positions = new Map();
 function edgeKey(from_id, to_id) { return from_id + '>' + to_id; }
 
 function isPending(node_id) {
@@ -28,7 +72,14 @@ fetch('tree').then(response => {
         server_names.set(n.id, n.label);
         if (!n.plugin) needs_plugin.add(n.id);
     });
-    JSON.parse(text).edges.forEach(e => server_edges.add(edgeKey(e.fromNodeId, e.toNodeId)));
+    var tree = JSON.parse(text);
+    tree.edges.forEach(e => server_edges.add(edgeKey(e.fromNodeId, e.toNodeId)));
+    tree.nodes.forEach(n => server_positions.set(n.id, [n.x, n.y]));
+    if (tree.filename) {
+        document.getElementById('file-name').textContent = tree.filename;
+        file_name = tree.filename;
+        updateSaveState();
+    }
     dag_edit.importJSON(text);
 });
 
@@ -379,13 +430,14 @@ function choosePlugin(node, plugin, status) {
         parents: neighbours.parents.filter(id => server_nodes.has(id)),
         children: neighbours.children.filter(id => server_nodes.has(id)),
     };
-    fetch('node', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r => {
+    changeFetch('node', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r => {
         if (!r.ok) return r.text().then(t => { throw new Error(t || r.status + ' ' + r.statusText); });
         return r.json();
     }).then(json => {
         choosing = false;
         server_nodes.add(node.id);
         server_names.set(node.id, json.node.label);
+        server_positions.set(node.id, [json.node.x, json.node.y]);
         json.edges.forEach(e => server_edges.add(edgeKey(e.fromNodeId, e.toNodeId)));
         needs_plugin.delete(node.id);
         applyServerNode(json.node, json.edges);
@@ -482,7 +534,7 @@ dag_edit.onUpdateNode = function(node) {
 function renameOnServer(node) {
     var old_name = server_names.get(node.id);
     server_names.set(node.id, node.label);
-    fetch('name/' + node.id + '?name=' + encodeURIComponent(node.label), { method: 'POST' }).then(r => {
+    changeFetch('name/' + node.id + '?name=' + encodeURIComponent(node.label), { method: 'POST' }).then(r => {
         if (!r.ok) return r.text().then(t => { throw new Error(t || r.status + ' ' + r.statusText); });
         return r.json();
     }).then(json => {
@@ -528,13 +580,14 @@ var restoring = new Set();
 
 function deleteOnServer(node_id) {
     server_nodes.delete(node_id);
+    server_positions.delete(node_id);
     needs_plugin.delete(node_id);
     server_names.delete(node_id);
     server_edges.forEach(key => {
         var ends = key.split('>');
         if (ends[0] == node_id || ends[1] == node_id) server_edges.delete(key);
     });
-    fetch('delete/' + node_id, { method: 'POST' }).then(r => {
+    changeFetch('delete/' + node_id, { method: 'POST' }).then(r => {
         if (!r.ok) throw new Error('not okay');
         return r.json();
     }).then(snapshot => {
@@ -567,7 +620,7 @@ function restoreOnServer(node_id) {
         parents: neighbours.parents.filter(id => server_nodes.has(id)),
         children: neighbours.children.filter(id => server_nodes.has(id)),
     };
-    fetch('node', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r => {
+    changeFetch('node', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r => {
         if (!r.ok) throw new Error('not okay');
         return r.json();
     }).then(json => {
@@ -580,6 +633,7 @@ function restoreOnServer(node_id) {
         }
         server_nodes.add(node_id);
         server_names.set(node_id, json.node.label);
+        server_positions.set(node_id, [json.node.x, json.node.y]);
         json.edges.forEach(e => server_edges.add(edgeKey(e.fromNodeId, e.toNodeId)));
         applyServerNode(json.node, json.edges);
         if (selected_node && selected_node.id == node_id) showNodeConfig(selected_node);
@@ -626,12 +680,14 @@ function syncAfterRestore() {
         .map(e => edgeKey(e.fromNodeId, e.toNodeId)));
     wanted.forEach(key => { if (!server_edges.has(key)) sendEdge(key, 'add'); });
     Array.from(server_edges).forEach(key => { if (!wanted.has(key)) sendEdge(key, 'del'); });
+
+    sendPositions();
 }
 
 function sendEdge(key, op) {
     var ends = key.split('>');
     if (op == 'add') server_edges.add(key); else server_edges.delete(key);
-    fetch('edge/' + ends[0] + '/' + ends[1] + '/' + op, { method: 'POST' }).then(r => { if (!r.ok) throw new Error('not okay'); });
+    changeFetch('edge/' + ends[0] + '/' + ends[1] + '/' + op, { method: 'POST' }).then(r => { if (!r.ok) throw new Error('not okay'); });
 }
 
 /* ── Selecting, configuring and connecting nodes ───────────────────── */
@@ -649,7 +705,7 @@ function showNodeConfig(node) {
             config_edit = new SchemaEditor(config_container, json.schema, json.config);
             config_edit.onChange(function(doc) {
                     var opts = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(doc) };
-                    fetch('post/' + node.id, opts).then(r => {
+                    changeFetch('post/' + node.id, opts).then(r => {
                         if (!r.ok) throw new Error('not okay');
                         if (node == selected_node) loadPreview(node, preview.offset);
                     });
@@ -703,6 +759,109 @@ dag_edit.onDeleteEdge = function(edge) {
     }
     edgeChanged(edge);
 }
+
+/* ── Positions and layout ───────────────────────────────────────────── */
+
+// The editor's normalised positions for the nodes the server has.  These
+// are relative to the whole graph, so moving one node can move them all.
+function editorPositions() {
+    var positions = {};
+    (dag_edit.toJSON().nodes || []).forEach(n => {
+        if (server_nodes.has(n.id)) positions[n.id] = [n.x, n.y];
+    });
+    return positions;
+}
+
+// Send the positions which have changed, if any.
+function sendPositions() {
+    var changed = {};
+    var any = false;
+    Object.entries(editorPositions()).forEach(([id, xy]) => {
+        var old = server_positions.get(id);
+        if (!old || Math.abs(old[0] - xy[0]) > 1e-4 || Math.abs(old[1] - xy[1]) > 1e-4) {
+            changed[id] = xy;
+            server_positions.set(id, xy);
+            any = true;
+        }
+    });
+    if (!any) return;
+    changeFetch('positions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changed) })
+        .then(r => { if (!r.ok) throw new Error('not okay'); });
+}
+
+dag_edit.onMoveNode = function() { sendPositions(); };
+
+var layout_button = document.getElementById('layout-button');
+var layout_pin = document.getElementById('layout-pin');
+
+layout_button.addEventListener('click', () => dag_edit.autoLayout(true));
+layout_pin.addEventListener('click', () => dag_edit.setLayoutPinned(!dag_edit.layoutPinned));
+
+// Layout doesn't call onMoveNode, so send positions when a run finishes.
+dag_edit.onLayoutChange = function(active) {
+    layout_button.classList.toggle('is-busy', active);
+    if (!active) sendPositions();
+};
+dag_edit.onPinChange = function(pinned) {
+    layout_pin.setAttribute('aria-pressed', String(pinned));
+};
+
+/* ── Saving ─────────────────────────────────────────────────────────── */
+
+var saving = false;
+
+function save() {
+    if (saving) return;
+    saving = true;
+    save_button.disabled = true;
+    showSaveStatus('Saving\u2026');
+    // let changes already sent arrive first, so they're in the file
+    Promise.allSettled(Array.from(pending_changes)).then(() => {
+        var saving_changes = changes;
+        var positions = editorPositions();
+        return fetch('save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ positions: positions }) }).then(r => {
+            if (!r.ok) return r.text().then(t => { throw new Error(t || r.status + ' ' + r.statusText); });
+            return r.json();
+        }).then(json => {
+            saved_changes = Math.max(saved_changes, saving_changes);
+            Object.entries(positions).forEach(([id, xy]) => server_positions.set(id, xy));
+            // writing the file can make names unique
+            Object.entries(json.names || {}).forEach(([id, name]) => {
+                if (server_names.get(id) != name) {
+                    server_names.set(id, name);
+                    setLabelFromServer(id, name);
+                }
+            });
+            showSaveStatus('Saved ' + json.filename);
+        });
+    }).catch(err => {
+        showSaveStatus('Couldn\u2019t save. ' + err.message, true);
+    }).finally(() => {
+        saving = false;
+        save_button.disabled = false;
+        updateSaveState();
+    });
+}
+
+save_button.addEventListener('click', save);
+
+document.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() == 's') {
+        e.preventDefault();
+        save();
+    }
+});
+
+// With unsaved changes, ask before the window or tab is closed or reloaded.
+// Browsers show their own wording (such as "Leave site? Changes you made
+// may not be saved.") and won't show a custom message or a Save button.
+window.addEventListener('beforeunload', e => {
+    if (!isUnsaved() && !saving) return;
+    e.preventDefault();
+    e.returnValue = '';
+});
+
+updateSaveState();
 
 /* ── Shut the server down when the page closes ─────────────────────── */
 

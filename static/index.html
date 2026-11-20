@@ -16,12 +16,28 @@
 <body>
 <header class="app-bar">
   <h1 class="app-name">CountESS</h1>
+  <span class="file-name" id="file-name"></span>
   <!-- Only shown on narrow screens, where one pane is visible at a time. -->
   <nav class="tabs" role="tablist" aria-label="Panes">
     <button type="button" role="tab" id="tab-dag" aria-controls="pane-dag" aria-selected="true" data-pane="dag">Pipeline</button>
     <button type="button" role="tab" id="tab-config" aria-controls="pane-config" aria-selected="false" tabindex="-1" data-pane="config">Settings</button>
     <button type="button" role="tab" id="tab-view" aria-controls="pane-view" aria-selected="false" tabindex="-1" data-pane="view">Preview</button>
   </nav>
+  <div class="toolbar" role="toolbar" aria-label="Pipeline">
+    <button type="button" class="tool" id="layout-button" title="Arrange the graph (L)">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="4" height="3" rx=".5"/><rect x="10.5" y="2.5" width="4" height="3" rx=".5"/><rect x="10.5" y="10.5" width="4" height="3" rx=".5"/><path d="M5.5 4h5M8 4v8h2.5"/></svg>
+      Layout
+    </button>
+    <button type="button" class="tool" id="layout-pin" aria-pressed="false" title="Arrange the graph again whenever edges change (Shift+L)">
+      Auto
+    </button>
+    <span class="toolbar-gap"></span>
+    <button type="button" class="tool tool-save" id="save-button" title="Save the configuration file (Ctrl+S)">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 2.5h9l2 2v9h-11z M5 2.5v3.5h5.5V2.5 M4.5 13.5V9.5h7v4"/></svg>
+      <span id="save-label">Save</span>
+    </button>
+    <span class="save-status" id="save-status" role="status"></span>
+  </div>
 </header>
 
 <main id="workspace" class="workspace">
