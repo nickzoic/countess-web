@@ -226,3 +226,17 @@ dag_edit.onAddEdge = function(edge) {
 dag_edit.onDeleteEdge = function(edge) {
     fetch('edge/' + edge.fromNodeId + '/' + edge.toNodeId + '/del', { method: 'POST' }).then(r => { if (!r.ok) throw new Error('not okay'); });
 }
+
+/* ── Shut the server down when the page closes ─────────────────────── */
+
+// The server waits a few seconds before quitting, and any request in that
+// time (such as reloading the page) cancels it, so a reload is safe.
+window.addEventListener('pagehide', function() {
+    navigator.sendBeacon('quit');
+});
+
+// Coming back from the browser's back/forward cache sends no request,
+// so tell the server the page is still here.
+window.addEventListener('pageshow', function(event) {
+    if (event.persisted) fetch('./', { method: 'HEAD' });
+});

@@ -20,6 +20,13 @@ ddbc = duckdb.connect()
 # Most rows a node is run with when previewing it.
 PREVIEW_ROW_LIMIT = 100000
 
+# How long to wait after the page closes before shutting down.
+# Reloading the page within this time keeps the server running.
+QUIT_GRACE_SECONDS = 3
+
+quit_event = None   # set when the server should shut down
+quit_timer = None   # pending shutdown after the page closed
+
 async def root_handler(request):
     """just returns the index page"""
     return web.FileResponse("./static/index.html")
@@ -127,16 +134,30 @@ async def view_handler(request):
     return web.json_response(data)
 
 async def quit_handler(request):
-    """The browser calls this when exiting to make the
-    server go away.  When this returns, it should close
-    the window as well."""
+    """The page calls this when its window or tab is closing.  The server
+    shuts down after a short grace period, which any further request
+    cancels, so that reloading the page doesn't stop the server."""
+    global quit_timer
+    if quit_timer:
+        quit_timer.cancel()
 
-    async def _intr_task():
-        await asyncio.sleep(1)
-        signal.raise_signal(signal.SIGINT)
+    async def _quit_later():
+        await asyncio.sleep(QUIT_GRACE_SECONDS)
+        logging.info("page closed, shutting down")
+        quit_event.set()
 
-    await asyncio.create_task(_intr_task)
+    quit_timer = asyncio.create_task(_quit_later())
     return web.json_response({'okay': 'bye'})
+
+@web.middleware
+async def keepalive_middleware(request, handler):
+    """Any request other than a quit means a page is still open,
+    so cancel a pending shutdown."""
+    global quit_timer
+    if quit_timer and request.match_info.handler is not quit_handler:
+        quit_timer.cancel()
+        quit_timer = None
+    return await handler(request)
 
 async def webview_task(url):
     """If using a webview this loads it in a separate
@@ -165,14 +186,16 @@ async def webview_task(url):
     process.join()
 
 async def main(args):
-    """Load and prepare the graph"""
+    """Load and prepare the graph, then serve it until the page closes"""
+    global quit_event
+    quit_event = asyncio.Event()
 
     for n in graph.traverse_nodes():
         n.load_config()
         n.run(ddbc, row_limit=10000)
 
     key = secrets.token_hex(8)
-    app = web.Application()
+    app = web.Application(middlewares=[keepalive_middleware])
     app.add_routes([
         web.get('/' + key + '/', root_handler),
         web.get('/' + key + '/tree', tree_handler),
@@ -192,19 +215,25 @@ async def main(args):
     await site.start()
     url = f'http://localhost:{site.port}/{key}/'
 
-    if args.webview:
-        await asyncio.create_task(webview_task(url))
-    elif args.browser:
-        webbrowser.open(url)
-    else:
-        print(url)
+    try:
+        if args.webview:
+            # Stop when the webview window closes or the page asks to quit.
+            viewer = asyncio.create_task(webview_task(url))
+            quitter = asyncio.create_task(quit_event.wait())
+            await asyncio.wait([viewer, quitter], return_when=asyncio.FIRST_COMPLETED)
+            for task in (viewer, quitter):
+                task.cancel()
+            await asyncio.gather(viewer, quitter, return_exceptions=True)
+        else:
+            if args.browser:
+                webbrowser.open(url)
+            else:
+                print(url)
+            await quit_event.wait()
+    finally:
+        await runner.cleanup()
 
-    # wait forever.
-    while True:
-        await asyncio.sleep(1)
-        
 
-    
 if __name__ == '__main__':
     root_logger = logging.getLogger()
     root_logger.addHandler(logging.StreamHandler())
@@ -222,4 +251,7 @@ if __name__ == '__main__':
     graph = read_config([args.filename])
 
 
-    asyncio.run(main(args))
+    try:
+        asyncio.run(main(args))
+    except KeyboardInterrupt:
+        pass
