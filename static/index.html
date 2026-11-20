@@ -2,18 +2,65 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CountESS Web</title>
+<link rel="icon" href="favicon.ico">
 <link rel="stylesheet" href="dag-editor.css">
 <script src="dag-editor.js"> </script>
 
 <link rel="stylesheet" href="schmeditor.css">
 <script src="schmeditor.js"> </script>
+
+<link rel="stylesheet" href="layout.css">
 </head>
 <body>
-<div id="dag-container"></div>
-<div id="config-container"></div>
-<div id="view-container"></div>
+<header class="app-bar">
+  <h1 class="app-name">CountESS</h1>
+  <!-- Only shown on narrow screens, where one pane is visible at a time. -->
+  <nav class="tabs" role="tablist" aria-label="Panes">
+    <button type="button" role="tab" id="tab-dag" aria-controls="pane-dag" aria-selected="true" data-pane="dag">Pipeline</button>
+    <button type="button" role="tab" id="tab-config" aria-controls="pane-config" aria-selected="false" tabindex="-1" data-pane="config">Settings</button>
+    <button type="button" role="tab" id="tab-view" aria-controls="pane-view" aria-selected="false" tabindex="-1" data-pane="view">Preview</button>
+  </nav>
+</header>
+
+<main id="workspace" class="workspace">
+  <section class="pane pane-dag is-active" id="pane-dag" data-pane="dag" aria-labelledby="title-dag">
+    <header class="pane-head">
+      <h2 class="pane-title" id="title-dag">Pipeline</h2>
+      <button type="button" class="pane-max" aria-pressed="false" aria-label="Expand pipeline" title="Expand (Esc to restore)"></button>
+    </header>
+    <div id="dag-container" class="pane-body"></div>
+  </section>
+
+  <div class="splitter splitter-x" role="separator" tabindex="0" aria-orientation="vertical"
+       aria-controls="pane-dag" aria-label="Resize pipeline and settings"
+       aria-valuemin="0" aria-valuemax="100" data-axis="x"></div>
+
+  <section class="pane pane-config" id="pane-config" data-pane="config" aria-labelledby="title-config">
+    <header class="pane-head">
+      <h2 class="pane-title" id="title-config">Settings</h2>
+      <span class="pane-subject" id="config-subject"></span>
+      <button type="button" class="pane-max" aria-pressed="false" aria-label="Expand settings" title="Expand (Esc to restore)"></button>
+    </header>
+    <div id="config-container" class="pane-body pane-scroll" data-empty="Select a node in the pipeline to edit its settings."></div>
+  </section>
+
+  <div class="splitter splitter-y" role="separator" tabindex="0" aria-orientation="horizontal"
+       aria-controls="pane-dag pane-config" aria-label="Resize preview"
+       aria-valuemin="0" aria-valuemax="100" data-axis="y"></div>
+
+  <section class="pane pane-view" id="pane-view" data-pane="view" aria-labelledby="title-view">
+    <header class="pane-head">
+      <h2 class="pane-title" id="title-view">Preview</h2>
+      <span class="pane-subject" id="view-status"></span>
+      <button type="button" class="pane-max" aria-pressed="false" aria-label="Expand preview" title="Expand (Esc to restore)"></button>
+    </header>
+    <div id="view-container" class="pane-body pane-scroll" data-empty="Change a node’s settings to preview its output."></div>
+  </section>
+</main>
+
+<script src="layout.js"> </script>
 <script src="main.js"> </script>
 </body>
 </html>
-
