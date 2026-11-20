@@ -242,6 +242,37 @@ body.is-resizing-y, body.is-resizing-y * { cursor: row-resize !important; user-s
 .preview-message.is-error { color: #c62828; }
 @media (prefers-color-scheme: dark) { .preview-message.is-error { color: #ff7b72; } }
 
+/* ── Node name ─────────────────────────────────────────────────────── */
+
+.node-name {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  padding: 10px 12px 0;
+}
+.node-name[hidden] { display: none; }
+.node-name label { font-weight: 600; }
+.node-name input {
+  flex: 1;
+  min-width: 10ch;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 4px 8px;
+}
+.node-name input:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+.node-name input[aria-invalid="true"] { border-color: #c62828; }
+.node-name-error { flex-basis: 100%; font-size: 13px; color: #c62828; }
+.node-name-error:empty { display: none; }
+@media (prefers-color-scheme: dark) {
+  .node-name input[aria-invalid="true"] { border-color: #ff7b72; }
+  .node-name-error { color: #ff7b72; }
+}
+
 /* ── Plugin chooser ────────────────────────────────────────────────── */
 
 .plugin-chooser { padding: 12px; max-width: 72ch; }

@@ -79,9 +79,25 @@ async def tree_handler(request):
     })
 
 async def name_handler(request):
-    """Set the name of the node"""
-    node = graph.find_node_by_uuid(request.match_info['uuid'])
-    node.name = request.query['name']
+    """Set the name of the node.  Names must be unique (config files use
+    them as section names), so a number may be added to the name: the
+    name the node ends up with is returned."""
+    node = find_node(request.match_info['uuid'])
+    if node is None:
+        raise web.HTTPNotFound(text="no such node")
+    name = request.query.get('name', '').strip()
+    if not name:
+        raise web.HTTPBadRequest(text="a node needs a name")
+    node.name = name
+    graph.reset_node_name(node)
+    return web.json_response({"name": node.name})
+
+async def delete_handler(request):
+    """Remove a node from the graph, with its edges"""
+    node = find_node(request.match_info['uuid'])
+    if node is None:
+        raise web.HTTPNotFound(text="no such node")
+    graph.del_node(node)
     return web.json_response("ok")
 
 async def move_handler(request):
@@ -93,8 +109,11 @@ async def move_handler(request):
 
 async def edge_handler(request):
     """Add or remove an edge between nodes"""
-    node1 = graph.find_node_by_uuid(request.match_info['uuid1'])
-    node2 = graph.find_node_by_uuid(request.match_info['uuid2'])
+    node1 = find_node(request.match_info['uuid1'])
+    node2 = find_node(request.match_info['uuid2'])
+    if node1 is None or node2 is None:
+        # e.g. removing the edges of a node which has just been deleted
+        raise web.HTTPNotFound(text="no such node")
     op = request.match_info['op']
     if op == 'add':
         node2.add_parent(node1)
@@ -300,6 +319,8 @@ async def main(args):
         web.get('/' + key + '/tree', tree_handler),
         web.get('/' + key + '/plugins', plugins_handler),
         web.post('/' + key + '/node', new_node_handler),
+        web.post('/' + key + '/name/{uuid}', name_handler),
+        web.post('/' + key + '/delete/{uuid}', delete_handler),
         web.get('/' + key + '/conf/{uuid}', conf_handler),
         web.post('/' + key + "/post/{uuid}", post_handler),
         web.post('/' + key + '/move/{uuid1}', move_handler),

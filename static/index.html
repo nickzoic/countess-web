@@ -43,6 +43,11 @@
       <span class="pane-subject" id="config-subject"></span>
       <button type="button" class="pane-max" aria-pressed="false" aria-label="Expand settings" title="Expand (Esc to restore)"></button>
     </header>
+    <div class="node-name" id="node-name-row" hidden>
+      <label for="node-name">Name</label>
+      <input type="text" id="node-name" autocomplete="off" spellcheck="false">
+      <span class="node-name-error" id="node-name-error" role="alert"></span>
+    </div>
     <div id="config-container" class="pane-body pane-scroll" data-empty="Select a node in the pipeline to edit its settings."></div>
   </section>
 

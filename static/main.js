@@ -9,6 +9,8 @@ var view_status = document.getElementById('view-status');
 var server_nodes = new Set();
 // Server nodes which have no plugin yet.
 var needs_plugin = new Set();
+// The name the server has for each node, so renames can be spotted.
+var server_names = new Map();
 
 function isPending(node_id) {
     return !server_nodes.has(node_id) || needs_plugin.has(node_id);
@@ -20,6 +22,7 @@ fetch('tree').then(response => {
 }).then(text => {
     JSON.parse(text).nodes.forEach(n => {
         server_nodes.add(n.id);
+        server_names.set(n.id, n.label);
         if (!n.plugin) needs_plugin.add(n.id);
     });
     dag_edit.importJSON(text);
@@ -353,6 +356,7 @@ function choosePlugin(node, plugin, status) {
     }).then(json => {
         choosing = false;
         server_nodes.add(node.id);
+        server_names.set(node.id, json.node.label);
         needs_plugin.delete(node.id);
         applyServerNode(json.node, json.edges);
         if (node == selected_node) showNodeConfig(node);
@@ -371,7 +375,7 @@ function applyServerNode(server_node, server_edges) {
     applying_server_changes = true;
     try {
         var id = server_node.id;
-        dag_edit.setNodeLabel(id, server_node.label);
+        dag_edit.setNodeLabel(id, server_node.label);   // the server may have changed it
         var node = dag_edit.getGraph().nodes.find(n => n.id == id);
         if (!server_node.inputs.length) node.inputs.slice().forEach(p => dag_edit.removePort(id, 'input', p.id));
         if (!server_node.outputs.length) node.outputs.slice().forEach(p => dag_edit.removePort(id, 'output', p.id));
@@ -387,12 +391,110 @@ function applyServerNode(server_node, server_edges) {
     }
 }
 
+/* ── Renaming and deleting nodes ───────────────────────────────────── */
+
+var name_row = document.getElementById('node-name-row');
+var name_input = document.getElementById('node-name');
+var name_error = document.getElementById('node-name-error');
+
+function setNameError(text) {
+    name_error.textContent = text;
+    if (text) name_input.setAttribute('aria-invalid', 'true');
+    else name_input.removeAttribute('aria-invalid');
+}
+
+function showNameField(node) {
+    name_input.value = node.label || '';
+    setNameError('');
+    name_row.hidden = false;
+}
+
+// Commit the name on Enter or leaving the field; Escape puts it back.
+name_input.addEventListener('change', () => {
+    if (!selected_node) return;
+    var name = name_input.value.trim();
+    if (!name) {
+        setNameError('A node needs a name.');
+        return;
+    }
+    setNameError('');
+    dag_edit.setNodeLabel(selected_node.id, name);   // calls onUpdateNode
+});
+name_input.addEventListener('keydown', e => {
+    if (e.key == 'Enter') name_input.blur();
+    else if (e.key == 'Escape' && selected_node) {
+        e.preventDefault();   // don't also restore an expanded pane
+        name_input.value = selected_node.label;
+        setNameError('');
+    }
+});
+
+function setLabelFromServer(node_id, label) {
+    applying_server_changes = true;
+    try { dag_edit.setNodeLabel(node_id, label); }
+    finally { applying_server_changes = false; }
+    if (selected_node && selected_node.id == node_id) {
+        if (document.activeElement != name_input) name_input.value = label;
+        if (!isPending(node_id)) config_subject.textContent = label;
+    }
+}
+
+// Called for label and port changes; only a changed label matters here.
+dag_edit.onUpdateNode = function(node) {
+    if (applying_server_changes) return;
+    if (!server_nodes.has(node.id) || node.label == server_names.get(node.id)) {
+        if (selected_node && selected_node.id == node.id && isPending(node.id)) showPluginChooser(node);
+        return;
+    }
+    var old_name = server_names.get(node.id);
+    server_names.set(node.id, node.label);
+    fetch('name/' + node.id + '?name=' + encodeURIComponent(node.label), { method: 'POST' }).then(r => {
+        if (!r.ok) return r.text().then(t => { throw new Error(t || r.status + ' ' + r.statusText); });
+        return r.json();
+    }).then(json => {
+        // the server may have added a number to keep names unique
+        server_names.set(node.id, json.name);
+        setLabelFromServer(node.id, json.name);
+    }).catch(err => {
+        server_names.set(node.id, old_name);
+        setLabelFromServer(node.id, old_name);
+        if (selected_node && selected_node.id == node.id) setNameError('Couldn\u2019t rename the node. ' + err.message);
+    });
+};
+
+// Empty the settings and preview panes, back to their prompts.
+function clearSelection() {
+    selected_node = null;
+    if (config_edit) { config_edit.destroy(); config_edit = null; }
+    config_container.replaceChildren();
+    config_subject.textContent = '';
+    name_row.hidden = true;
+    preview.node = null;
+    preview.request++;
+    view_container.replaceChildren();
+    view_container.classList.remove('is-loading');
+    view_status.textContent = '';
+    pager.hidden = true;
+}
+
+// The editor reports the node's edges as deleted first (and, for a node
+// with one input and one output, then adds edges bridging the gap).
+dag_edit.onDeleteNode = function(node) {
+    if (selected_node && selected_node.id == node.id) clearSelection();
+    if (!server_nodes.has(node.id)) return;
+    server_nodes.delete(node.id);
+    needs_plugin.delete(node.id);
+    server_names.delete(node.id);
+    fetch('delete/' + node.id, { method: 'POST' }).then(r => { if (!r.ok) throw new Error('not okay'); });
+};
+
 /* ── Selecting, configuring and connecting nodes ───────────────────── */
 
 function showNodeConfig(node) {
     if (config_edit) { config_edit.destroy(); config_edit = null; }
     config_container.replaceChildren();
     config_subject.textContent = node.label || '';
+    showNameField(node);
     fetch('conf/' + node.id).then(response => {
             if (!response.ok) throw new Error('not okay');
             return response.json();
@@ -415,6 +517,7 @@ dag_edit.onSelectNode = function(node) {
     selected_node = node;
     if (isPending(node.id)) {
         if (config_edit) { config_edit.destroy(); config_edit = null; }
+        name_row.hidden = true;
         plugin_filter = '';
         showPluginChooser(node);
         preview.node = null;
