@@ -18,9 +18,12 @@ graph = None
 ddbc = duckdb.connect()
 
 async def root_handler(request):
+    """just returns the index page"""
     return web.FileResponse("./static/index.html")
 
 async def tree_handler(request):
+    """returns the whole DAG in a format ready for
+    use by the dag editor component"""
     return web.json_response({
         "version": 3,
         "nodes": [
@@ -45,15 +48,20 @@ async def tree_handler(request):
     })
 
 async def name_handler(request):
+    """Set the name of the node"""
     node = graph.find_node_by_uuid(request.match_info['uuid'])
     node.name = request.query['name']
+    return web.json_response("ok")
 
 async def move_handler(request):
+    """Move the position of the node"""
     node = graph.find_node_by_uuid(request.match_info['uuid'])
-    node.position[0] = float(request.query['x']) / 100
-    node.position[1] = float(request.query['y']) / 100
+    node.position[0] = float(request.query['x']) * 1000
+    node.position[1] = float(request.query['y']) * 1000
+    return web.json_response("ok")
 
 async def edge_handler(request):
+    """Add or remove an edge between nodes"""
     node1 = graph.find_node_by_uuid(request.match_info['uuid1'])
     node2 = graph.find_node_by_uuid(request.match_info['uuid2'])
     op = request.match_info['op']
@@ -61,8 +69,10 @@ async def edge_handler(request):
         node2.add_parent(node1)
     elif op == 'del':
         node2.del_parent(node1)
+    return web.json_response("ok")
 
 async def conf_handler(request):
+    """Retrieve configuration of a node"""
     node = graph.find_node_by_uuid(request.match_info['uuid'])
 
     return web.json_response({
@@ -74,17 +84,21 @@ async def conf_handler(request):
     })
 
 async def post_handler(request):
+    """Update configuration of a node."""
     node = graph.find_node_by_uuid(request.match_info['uuid'])
     data = await request.json()
     node.plugin.set_json_data(data)
     return web.json_response(node.plugin.get_json_data())
 
 async def file_handler(request):
+    """Gets a list of possible values for filenames"""
     path = request.match_info['path']
     return web.json_response(os.listdir(path))
 
 
 async def view_handler(request):
+    """Returns a preview of a table using 'ofs' and 'lim'
+    parameters to restrict the number of rows"""
     node = graph.find_node_by_uuid(request.match_info['uuid'])
     offset = int(request.query.get('ofs', 0))
     limit = int(request.query.get('lim', 1000))
@@ -104,6 +118,9 @@ async def view_handler(request):
     return web.json_response(data)
 
 async def quit_handler(request):
+    """The browser calls this when exiting to make the
+    server go away.  When this returns, it should close
+    the window as well."""
 
     async def _intr_task():
         await asyncio.sleep(1)
@@ -113,6 +130,8 @@ async def quit_handler(request):
     return web.json_response({'okay': 'bye'})
 
 async def webview_task(url):
+    """If using a webview this loads it in a separate
+    process.  If interrupted it kills the webview too."""
 
     def _webview():
         import webview
@@ -137,9 +156,11 @@ async def webview_task(url):
     process.join()
 
 async def main(args):
+    """Load and prepare the graph"""
 
     for n in graph.traverse_nodes():
         n.load_config()
+        n.run(ddbc, row_limit=10000)
 
     key = secrets.token_hex(8)
     app = web.Application()
@@ -169,6 +190,7 @@ async def main(args):
     else:
         print(url)
 
+    # wait forever.
     while True:
         await asyncio.sleep(1)
         
@@ -177,7 +199,7 @@ async def main(args):
 if __name__ == '__main__':
     root_logger = logging.getLogger()
     root_logger.addHandler(logging.StreamHandler())
-    root_logger.setLevel(logging.INFO)
+    root_logger.setLevel(logging.DEBUG)
 
     parser = argparse.ArgumentParser(
         prog="server.py",
@@ -192,6 +214,3 @@ if __name__ == '__main__':
 
 
     asyncio.run(main(args))
-    #web.run_app(main(), port=0)
-
-

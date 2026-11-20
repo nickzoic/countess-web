@@ -14,7 +14,7 @@ var selected_node;
 
 dag_edit.onSelectNode = function(node) {
     if (node == selected_node) return;
-    console.log("hello " + node);
+    console.log("hello " + node.id);
     if (config_edit) config_edit.destroy();
     fetch('conf/' + node.id).then(response => {
             if (!response.ok) throw new Error('not okay');
@@ -37,3 +37,12 @@ dag_edit.onSelectNode = function(node) {
     });
     selected_node = node;
 };
+
+dag_edit.onAddEdge = function(edge) {
+    fetch('edge/' + edge.fromNodeId + '/' + edge.toNodeId + '/add', { method: 'POST' }).then(r => { if (!r.ok) throw new Error('not okay'); });
+}
+
+dag_edit.onDeleteEdge = function(edge) {
+    fetch('edge/' + edge.fromNodeId + '/' + edge.toNodeId + '/del', { method: 'POST' }).then(r => { if (!r.ok) throw new Error('not okay'); });
+}
+
