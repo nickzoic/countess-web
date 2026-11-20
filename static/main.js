@@ -11,6 +11,9 @@ var server_nodes = new Set();
 var needs_plugin = new Set();
 // The name the server has for each node, so renames can be spotted.
 var server_names = new Map();
+// The edges the server has, as 'from>to' node id pairs.
+var server_edges = new Set();
+function edgeKey(from_id, to_id) { return from_id + '>' + to_id; }
 
 function isPending(node_id) {
     return !server_nodes.has(node_id) || needs_plugin.has(node_id);
@@ -25,6 +28,7 @@ fetch('tree').then(response => {
         server_names.set(n.id, n.label);
         if (!n.plugin) needs_plugin.add(n.id);
     });
+    JSON.parse(text).edges.forEach(e => server_edges.add(edgeKey(e.fromNodeId, e.toNodeId)));
     dag_edit.importJSON(text);
 });
 
@@ -127,6 +131,10 @@ function updatePager() {
 }
 
 function renderPreview(json) {
+    if (json.error) {
+        showPreviewMessage('This node couldn\u2019t be run.\n\n' + json.error, true);
+        return;
+    }
     var columns = json.columns || [];
     var rows = json.data || [];
     preview.total = typeof json.total == 'number' ? json.total : null;
@@ -378,6 +386,7 @@ function choosePlugin(node, plugin, status) {
         choosing = false;
         server_nodes.add(node.id);
         server_names.set(node.id, json.node.label);
+        json.edges.forEach(e => server_edges.add(edgeKey(e.fromNodeId, e.toNodeId)));
         needs_plugin.delete(node.id);
         applyServerNode(json.node, json.edges);
         if (node == selected_node) showNodeConfig(node);
@@ -467,6 +476,10 @@ dag_edit.onUpdateNode = function(node) {
         if (selected_node && selected_node.id == node.id && isPending(node.id)) showPluginChooser(node);
         return;
     }
+    renameOnServer(node);
+};
+
+function renameOnServer(node) {
     var old_name = server_names.get(node.id);
     server_names.set(node.id, node.label);
     fetch('name/' + node.id + '?name=' + encodeURIComponent(node.label), { method: 'POST' }).then(r => {
@@ -481,7 +494,7 @@ dag_edit.onUpdateNode = function(node) {
         setLabelFromServer(node.id, old_name);
         if (selected_node && selected_node.id == node.id) setNameError('Couldn\u2019t rename the node. ' + err.message);
     });
-};
+}
 
 // Empty the settings and preview panes, back to their prompts.
 function clearSelection() {
@@ -504,12 +517,122 @@ function clearSelection() {
 // with one input and one output, then adds edges bridging the gap).
 dag_edit.onDeleteNode = function(node) {
     if (selected_node && selected_node.id == node.id) clearSelection();
-    if (!server_nodes.has(node.id)) return;
-    server_nodes.delete(node.id);
-    needs_plugin.delete(node.id);
-    server_names.delete(node.id);
-    fetch('delete/' + node.id, { method: 'POST' }).then(r => { if (!r.ok) throw new Error('not okay'); });
+    if (server_nodes.has(node.id)) deleteOnServer(node.id);
 };
+
+// What the server returned for each node it deleted (its plugin, config,
+// name and notes), so that undoing the deletion can make it again.
+var deleted_nodes = new Map();
+// Nodes being made again after an undo.
+var restoring = new Set();
+
+function deleteOnServer(node_id) {
+    server_nodes.delete(node_id);
+    needs_plugin.delete(node_id);
+    server_names.delete(node_id);
+    server_edges.forEach(key => {
+        var ends = key.split('>');
+        if (ends[0] == node_id || ends[1] == node_id) server_edges.delete(key);
+    });
+    fetch('delete/' + node_id, { method: 'POST' }).then(r => {
+        if (!r.ok) throw new Error('not okay');
+        return r.json();
+    }).then(snapshot => {
+        deleted_nodes.set(node_id, snapshot);
+        // undone before the server had answered
+        if (editorNode(node_id)) restoreOnServer(node_id);
+    });
+}
+
+function editorNode(node_id) {
+    return dag_edit.getGraph().nodes.find(n => n.id == node_id);
+}
+
+// Make a deleted node again, with the config it had, and the edges it now
+// has in the editor to nodes the server knows.
+function restoreOnServer(node_id) {
+    var snapshot = deleted_nodes.get(node_id);
+    if (!snapshot || !snapshot.plugin || restoring.has(node_id) || server_nodes.has(node_id)) return;
+    restoring.add(node_id);
+    var neighbours = editorNeighbours(node_id);
+    var position = (dag_edit.toJSON().nodes || []).find(n => n.id == node_id) || {};
+    var body = {
+        id: node_id,
+        plugin: snapshot.plugin,
+        name: (editorNode(node_id) || {}).label || snapshot.name,
+        config: snapshot.config,
+        notes: snapshot.notes,
+        x: position.x,
+        y: position.y,
+        parents: neighbours.parents.filter(id => server_nodes.has(id)),
+        children: neighbours.children.filter(id => server_nodes.has(id)),
+    };
+    fetch('node', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r => {
+        if (!r.ok) throw new Error('not okay');
+        return r.json();
+    }).then(json => {
+        restoring.delete(node_id);
+        deleted_nodes.delete(node_id);
+        if (!editorNode(node_id)) {
+            // deleted again (redo) while this was on its way
+            deleteOnServer(node_id);
+            return;
+        }
+        server_nodes.add(node_id);
+        server_names.set(node_id, json.node.label);
+        json.edges.forEach(e => server_edges.add(edgeKey(e.fromNodeId, e.toNodeId)));
+        applyServerNode(json.node, json.edges);
+        if (selected_node && selected_node.id == node_id) showNodeConfig(selected_node);
+    }).catch(() => {
+        // it's left as a new node, which can be given a plugin again
+        restoring.delete(node_id);
+    });
+}
+
+/* ── Undo and redo ──────────────────────────────────────────────────── */
+
+// The editor's undo and redo (Ctrl+Z, Ctrl+Shift+Z, Ctrl+Y) replace its
+// whole graph without calling any hooks, so afterwards compare the graph
+// with what the server has and send the differences.
+['undo', 'redo'].forEach(method => {
+    var original = dag_edit[method].bind(dag_edit);
+    dag_edit[method] = function() {
+        original();
+        syncAfterRestore();
+    };
+});
+
+function syncAfterRestore() {
+    var graph = dag_edit.getGraph();
+    var in_editor = new Set(graph.nodes.map(n => n.id));
+
+    // the editor deselects everything when it restores
+    clearSelection();
+
+    // nodes the undo removed, then nodes it brought back
+    Array.from(server_nodes).forEach(id => { if (!in_editor.has(id)) deleteOnServer(id); });
+    graph.nodes.forEach(n => {
+        if (!server_nodes.has(n.id) && deleted_nodes.has(n.id)) restoreOnServer(n.id);
+    });
+
+    // names
+    graph.nodes.forEach(n => {
+        if (server_nodes.has(n.id) && n.label != server_names.get(n.id)) renameOnServer(n);
+    });
+
+    // edges between nodes the server has (restored nodes bring their own)
+    var wanted = new Set(graph.edges
+        .filter(e => server_nodes.has(e.fromNodeId) && server_nodes.has(e.toNodeId))
+        .map(e => edgeKey(e.fromNodeId, e.toNodeId)));
+    wanted.forEach(key => { if (!server_edges.has(key)) sendEdge(key, 'add'); });
+    Array.from(server_edges).forEach(key => { if (!wanted.has(key)) sendEdge(key, 'del'); });
+}
+
+function sendEdge(key, op) {
+    var ends = key.split('>');
+    if (op == 'add') server_edges.add(key); else server_edges.delete(key);
+    fetch('edge/' + ends[0] + '/' + ends[1] + '/' + op, { method: 'POST' }).then(r => { if (!r.ok) throw new Error('not okay'); });
+}
 
 /* ── Selecting, configuring and connecting nodes ───────────────────── */
 
@@ -568,7 +691,7 @@ function edgeChanged(edge) {
 dag_edit.onAddEdge = function(edge) {
     if (applying_server_changes) return;
     if (server_nodes.has(edge.fromNodeId) && server_nodes.has(edge.toNodeId)) {
-        fetch('edge/' + edge.fromNodeId + '/' + edge.toNodeId + '/add', { method: 'POST' }).then(r => { if (!r.ok) throw new Error('not okay'); });
+        sendEdge(edgeKey(edge.fromNodeId, edge.toNodeId), 'add');
     }
     edgeChanged(edge);
 }
@@ -576,7 +699,7 @@ dag_edit.onAddEdge = function(edge) {
 dag_edit.onDeleteEdge = function(edge) {
     if (applying_server_changes) return;
     if (server_nodes.has(edge.fromNodeId) && server_nodes.has(edge.toNodeId)) {
-        fetch('edge/' + edge.fromNodeId + '/' + edge.toNodeId + '/del', { method: 'POST' }).then(r => { if (!r.ok) throw new Error('not okay'); });
+        sendEdge(edgeKey(edge.fromNodeId, edge.toNodeId), 'del');
     }
     edgeChanged(edge);
 }

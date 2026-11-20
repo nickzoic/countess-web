@@ -267,7 +267,7 @@ body.is-resizing-y, body.is-resizing-y * { cursor: row-resize !important; user-s
 .pane-subject + .copy-status { margin-right: 4px; }
 
 .preview-message { padding: 16px; margin: 0; color: var(--muted); }
-.preview-message.is-error { color: #c62828; }
+.preview-message.is-error { color: #c62828; white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (prefers-color-scheme: dark) { .preview-message.is-error { color: #ff7b72; } }
 
 /* ── Node name ─────────────────────────────────────────────────────── */

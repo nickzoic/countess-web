@@ -6,6 +6,7 @@ import os
 import secrets
 import signal
 import sys
+import threading
 import time
 import webbrowser
 
@@ -13,7 +14,7 @@ from aiohttp import web
 import duckdb
 
 from countess.core.config import read_config
-from countess.core.pipeline import PipelineNode
+from countess.core.pipeline import PipelineNode, PipelineNodeStatus
 from countess.core.plugins import get_plugin_classes
 
 graph = None
@@ -27,6 +28,9 @@ PREVIEW_ROW_LIMIT = 100000
 QUIT_GRACE_SECONDS = 3
 
 plugin_classes = {}  # plugin id -> plugin class, filled in by main()
+
+# Held while running nodes, so two previews can't run the same node at once.
+run_lock = threading.Lock()
 
 quit_event = None   # set when the server should shut down
 quit_timer = None   # pending shutdown after the page closed
@@ -88,17 +92,29 @@ async def name_handler(request):
     name = request.query.get('name', '').strip()
     if not name:
         raise web.HTTPBadRequest(text="a node needs a name")
-    node.name = name
-    graph.reset_node_name(node)
+    if name != node.name:
+        node.name = name
+        graph.reset_node_name(node)
+        # nodes get their inputs keyed by their parents' names
+        for child in node.child_nodes:
+            child.mark_dirty()
     return web.json_response({"name": node.name})
 
 async def delete_handler(request):
-    """Remove a node from the graph, with its edges"""
+    """Remove a node from the graph, with its edges.  Returns what is
+    needed to make it again (see new_node_handler), to undo the deletion."""
     node = find_node(request.match_info['uuid'])
     if node is None:
         raise web.HTTPNotFound(text="no such node")
+    snapshot = {
+        "id": node.uuid,
+        "name": node.name,
+        "plugin": plugin_id(type(node.plugin)) if node.plugin else None,
+        "config": node.plugin.get_json_data() if node.plugin else None,
+        "notes": node.notes,
+    }
     graph.del_node(node)
-    return web.json_response("ok")
+    return web.json_response(snapshot)
 
 async def move_handler(request):
     """Move the position of the node"""
@@ -143,7 +159,10 @@ async def new_node_handler(request):
 
     Takes JSON {id, plugin, x, y, parents: [uuid], children: [uuid]}
     and returns {node, edges} in the same form as the tree handler, with
-    only the edges which were actually made."""
+    only the edges which were actually made.
+
+    To restore a deleted node, also pass the name, config and notes that
+    delete_handler returned for it."""
     data = await request.json()
     plugin_class = plugin_classes.get(data.get("plugin"))
     if not plugin_class:
@@ -152,11 +171,14 @@ async def new_node_handler(request):
     node = find_node(data.get("id"))
     if node is None:
         node = PipelineNode(
-            name=plugin_class.name,
+            name=data.get("name") or plugin_class.name,
             uuid=data["id"],
             position=(float(data.get("x", 0.5)), float(data.get("y", 0.5))),
+            notes=data.get("notes"),
         )
         node.plugin = plugin_class()
+        if data.get("config") is not None:
+            node.plugin.set_json_data(data["config"])
         graph.add_node(node)    # also makes the name unique
     elif node.plugin:
         raise web.HTTPConflict(text="node already has a plugin")
@@ -213,6 +235,7 @@ async def post_handler(request):
     node = graph.find_node_by_uuid(request.match_info['uuid'])
     data = await request.json()
     node.plugin.set_json_data(data)
+    node.mark_dirty()   # this node and everything downstream must run again
     return web.json_response(node.plugin.get_json_data())
 
 async def file_handler(request):
@@ -220,6 +243,18 @@ async def file_handler(request):
     path = request.match_info['path']
     return web.json_response(os.listdir(path))
 
+
+def run_if_needed(node, cursor):
+    """Run a node, and first any of its ancestors, if it has never been run
+    or something it depends on has changed since: its config, its edges or
+    anything upstream (all of which mark it dirty).  Otherwise its table
+    from the last run is still good.  Every cursor of the connection sees
+    the same tables, so a table made for one request serves the next."""
+    for parent in node.parent_nodes:
+        run_if_needed(parent, cursor)
+    # WORKING means a run was interrupted
+    if node.status in (PipelineNodeStatus.DIRTY, PipelineNodeStatus.WORKING):
+        node.run(cursor, row_limit=PREVIEW_ROW_LIMIT)
 
 async def view_handler(request):
     """Returns a preview of a table using 'ofs' and 'lim'
@@ -230,7 +265,10 @@ async def view_handler(request):
 
     def _view_query():
         cursor = ddbc.cursor()
-        node.run(cursor, row_limit=PREVIEW_ROW_LIMIT)
+        with run_lock:
+            run_if_needed(node, cursor)
+        if node.status == PipelineNodeStatus.ERROR:
+            return {"error": node.message or "This node couldn't be run."}
         table = cursor.table(node.table_name)
         total = table.aggregate("count(*)").fetchall()[0][0]
 
@@ -308,9 +346,10 @@ async def main(args):
     for plugin_class in get_plugin_classes():
         plugin_classes[plugin_id(plugin_class)] = plugin_class
 
+    # Nodes are run when they're first previewed, not here.
     for n in graph.traverse_nodes():
-        n.load_config()
-        n.run(ddbc, row_limit=10000)
+        if n.plugin:
+            n.load_config()
 
     key = secrets.token_hex(8)
     app = web.Application(middlewares=[keepalive_middleware])
