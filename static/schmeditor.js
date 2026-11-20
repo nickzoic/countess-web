@@ -1,0 +1,1 @@
+../schmeditor/javascript/schmeditor.js

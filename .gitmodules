@@ -1,0 +1,6 @@
+[submodule "dag-editor"]
+	path = dag-editor
+	url = https://github.com/nickzoic/dag-editor/
+[submodule "schmeditor"]
+	path = schmeditor
+	url = https://github.com/nickzoic/schmeditor
