@@ -214,4 +214,9 @@
   setMax(null);
   selectTab(state.tab, false);
   syncRoles();
+
+  // For main.js: bring a pane into view on a narrow screen.
+  window.countessLayout = {
+    show(name) { if (NARROW.matches) selectTab(name, false); },
+  };
 })();

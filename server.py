@@ -13,6 +13,8 @@ from aiohttp import web
 import duckdb
 
 from countess.core.config import read_config
+from countess.core.pipeline import PipelineNode
+from countess.core.plugins import get_plugin_classes
 
 graph = None
 ddbc = duckdb.connect()
@@ -24,8 +26,27 @@ PREVIEW_ROW_LIMIT = 100000
 # Reloading the page within this time keeps the server running.
 QUIT_GRACE_SECONDS = 3
 
+plugin_classes = {}  # plugin id -> plugin class, filled in by main()
+
 quit_event = None   # set when the server should shut down
 quit_timer = None   # pending shutdown after the page closed
+
+def plugin_id(plugin_class):
+    """A stable id for a plugin class: its module and class name,
+    which is also how config files refer to it."""
+    return plugin_class.__module__ + ":" + plugin_class.__name__
+
+def node_ports(node):
+    """The ports the DAG editor should draw on a node.  A node with no
+    plugin yet gets both, like a new node in the editor."""
+    return {
+        "inputs": [{"id": "in", "label": ""}] if not node.plugin or node.plugin.num_inputs else [],
+        "outputs": [{"id": "out", "label": ""}] if not node.plugin or node.plugin.num_outputs else [],
+    }
+
+def find_node(uuid):
+    """The node with this uuid, or None"""
+    return next((n for n in graph.traverse_nodes() if n.uuid == uuid), None)
 
 async def root_handler(request):
     """just returns the index page"""
@@ -42,8 +63,8 @@ async def tree_handler(request):
                 "label": n.name,
                 "x": n.position[0],
                 "y": n.position[1],
-                "inputs": [{"id": "in", "label": ""}] if n.plugin.num_inputs else [],
-                "outputs": [{"id": "out", "label": ""}] if n.plugin.num_outputs else [],
+                **node_ports(n),
+                "plugin": plugin_id(type(n.plugin)) if n.plugin else None,
             } for n in graph.traverse_nodes()
         ], "edges": [
             {
@@ -80,6 +101,81 @@ async def edge_handler(request):
     elif op == 'del':
         node2.del_parent(node1)
     return web.json_response("ok")
+
+async def plugins_handler(request):
+    """Lists the plugins a node can use, sorted by name"""
+    return web.json_response([
+        {
+            "id": pid,
+            "name": pc.name,
+            "description": pc.description,
+            "num_inputs": pc.num_inputs,
+            "num_outputs": pc.num_outputs,
+            "link": pc.link,
+        } for pid, pc in sorted(plugin_classes.items(), key=lambda x: x[1].name.lower())
+    ])
+
+async def new_node_handler(request):
+    """Gives a node its plugin.  Nodes made in the DAG editor don't exist
+    on the server until their plugin is chosen, so this creates the node,
+    with the editor's id as its uuid, and connects it to the parents and
+    children it already has in the editor.  A node from the config file
+    which has no plugin is given one instead.
+
+    Takes JSON {id, plugin, x, y, parents: [uuid], children: [uuid]}
+    and returns {node, edges} in the same form as the tree handler, with
+    only the edges which were actually made."""
+    data = await request.json()
+    plugin_class = plugin_classes.get(data.get("plugin"))
+    if not plugin_class:
+        raise web.HTTPBadRequest(text="unknown plugin")
+
+    node = find_node(data.get("id"))
+    if node is None:
+        node = PipelineNode(
+            name=plugin_class.name,
+            uuid=data["id"],
+            position=(float(data.get("x", 0.5)), float(data.get("y", 0.5))),
+        )
+        node.plugin = plugin_class()
+        graph.add_node(node)    # also makes the name unique
+    elif node.plugin:
+        raise web.HTTPConflict(text="node already has a plugin")
+    else:
+        node.plugin = plugin_class()
+
+    for uuid in data.get("parents", []):
+        parent = find_node(uuid)
+        if parent and parent is not node:
+            node.add_parent(parent)
+    for uuid in data.get("children", []):
+        child = find_node(uuid)
+        if child and child is not node:
+            child.add_parent(node)
+
+    # a node from the config may have had edges this plugin can't have
+    if not plugin_class.num_inputs:
+        for parent in list(node.parent_nodes):
+            node.del_parent(parent)
+    if not plugin_class.num_outputs:
+        for child in list(node.child_nodes):
+            child.del_parent(node)
+    node.mark_dirty()
+
+    return web.json_response({
+        "node": {
+            "id": node.uuid,
+            "label": node.name,
+            "x": node.position[0],
+            "y": node.position[1],
+            **node_ports(node),
+            "plugin": plugin_id(plugin_class),
+        },
+        "edges": [
+            {"id": p.uuid + "/" + c.uuid, "fromNodeId": p.uuid, "fromPortId": "out", "toNodeId": c.uuid, "toPortId": "in"}
+            for p, c in [(p, node) for p in node.parent_nodes] + [(node, c) for c in node.child_nodes]
+        ],
+    })
 
 async def conf_handler(request):
     """Retrieve configuration of a node"""
@@ -190,6 +286,9 @@ async def main(args):
     global quit_event
     quit_event = asyncio.Event()
 
+    for plugin_class in get_plugin_classes():
+        plugin_classes[plugin_id(plugin_class)] = plugin_class
+
     for n in graph.traverse_nodes():
         n.load_config()
         n.run(ddbc, row_limit=10000)
@@ -199,6 +298,8 @@ async def main(args):
     app.add_routes([
         web.get('/' + key + '/', root_handler),
         web.get('/' + key + '/tree', tree_handler),
+        web.get('/' + key + '/plugins', plugins_handler),
+        web.post('/' + key + '/node', new_node_handler),
         web.get('/' + key + '/conf/{uuid}', conf_handler),
         web.post('/' + key + "/post/{uuid}", post_handler),
         web.post('/' + key + '/move/{uuid1}', move_handler),

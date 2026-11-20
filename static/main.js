@@ -4,10 +4,24 @@ var config_subject = document.getElementById('config-subject');
 var view_container = document.getElementById('view-container');
 var view_status = document.getElementById('view-status');
 
+// Nodes the server knows about.  A node made in the editor isn't one of
+// these until its plugin is chosen.
+var server_nodes = new Set();
+// Server nodes which have no plugin yet.
+var needs_plugin = new Set();
+
+function isPending(node_id) {
+    return !server_nodes.has(node_id) || needs_plugin.has(node_id);
+}
+
 fetch('tree').then(response => {
     if (!response.ok) throw new Error('not okay');
     return response.text();
 }).then(text => {
+    JSON.parse(text).nodes.forEach(n => {
+        server_nodes.add(n.id);
+        if (!n.plugin) needs_plugin.add(n.id);
+    });
     dag_edit.importJSON(text);
 });
 
@@ -197,9 +211,187 @@ page_size_select.addEventListener('change', () => {
     loadPreview(preview.node, Math.floor(preview.offset / preview.limit) * preview.limit);
 });
 
-dag_edit.onSelectNode = function(node) {
-    if (node == selected_node) return;
+/* ── Choosing a plugin for a new node ──────────────────────────────── */
+
+var plugin_list = fetch('plugins').then(r => {
+    if (!r.ok) throw new Error('The server returned ' + r.status + ' ' + r.statusText + '.');
+    return r.json();
+});
+var plugin_filter = '';
+var choosing = false;   // a plugin choice is on its way to the server
+
+// The node's edges in the editor, as the ids of its parents and children.
+function editorNeighbours(node_id) {
+    var edges = dag_edit.getGraph().edges;
+    return {
+        parents: edges.filter(e => e.toNodeId == node_id).map(e => e.fromNodeId),
+        children: edges.filter(e => e.fromNodeId == node_id).map(e => e.toNodeId),
+    };
+}
+
+function showPluginChooser(node) {
+    var focused_filter = document.activeElement && document.activeElement.classList.contains('plugin-filter');
+    config_subject.textContent = 'Choose a plugin for ' + (node.label || 'this node');
+
+    plugin_list.then(plugins => {
+        if (node != selected_node || !isPending(node.id)) return;
+        var neighbours = editorNeighbours(node.id);
+        var has_parents = neighbours.parents.length > 0;
+        var has_children = neighbours.children.length > 0;
+
+        // As in the CountESS GUI: a node with no inputs loads data, a node
+        // with inputs processes it, and a node with outputs must have them.
+        var usable = plugins.filter(p =>
+            (has_parents ? p.num_inputs > 0 : p.num_inputs == 0) &&
+            !(has_children && p.num_outputs == 0));
+
+        var chooser = document.createElement('div');
+        chooser.className = 'plugin-chooser';
+
+        var hint = document.createElement('p');
+        hint.className = 'plugin-hint';
+        hint.textContent = has_parents
+            ? 'These plugins can process this node\u2019s input.'
+            : 'This node has no input, so these plugins load data. To process data instead, connect an input to it first.';
+        chooser.appendChild(hint);
+
+        var filter = document.createElement('input');
+        filter.type = 'search';
+        filter.className = 'plugin-filter';
+        filter.placeholder = 'Filter plugins';
+        filter.setAttribute('aria-label', 'Filter plugins');
+        filter.value = plugin_filter;
+        chooser.appendChild(filter);
+
+        var list = document.createElement('ul');
+        list.className = 'plugin-list';
+        chooser.appendChild(list);
+
+        var empty = document.createElement('p');
+        empty.className = 'plugin-hint';
+        chooser.appendChild(empty);
+
+        var status = document.createElement('p');
+        status.className = 'plugin-status';
+        status.setAttribute('role', 'status');
+        chooser.appendChild(status);
+
+        usable.forEach(p => {
+            var li = document.createElement('li');
+            var button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'plugin-button';
+            button.disabled = choosing;
+            var name = document.createElement('span');
+            name.className = 'plugin-name';
+            name.textContent = p.name;
+            button.appendChild(name);
+            if (p.description) {
+                var desc = document.createElement('span');
+                desc.className = 'plugin-desc';
+                desc.textContent = p.description;
+                button.appendChild(desc);
+            }
+            button.onclick = () => choosePlugin(node, p, status);
+            li.appendChild(button);
+            li.dataset.search = (p.name + ' ' + (p.description || '')).toLowerCase();
+            list.appendChild(li);
+        });
+
+        function applyFilter() {
+            plugin_filter = filter.value;
+            var words = plugin_filter.toLowerCase().split(/\s+/).filter(Boolean);
+            var shown = 0;
+            Array.from(list.children).forEach(li => {
+                li.hidden = !words.every(w => li.dataset.search.includes(w));
+                if (!li.hidden) shown++;
+            });
+            empty.hidden = shown > 0;
+            empty.textContent = usable.length == 0
+                ? 'No plugins fit this node\u2019s connections.'
+                : 'No plugins match \u201c' + plugin_filter.trim() + '\u201d.';
+        }
+        filter.addEventListener('input', applyFilter);
+        applyFilter();
+
+        config_container.replaceChildren(chooser);
+        if (focused_filter) filter.focus();
+    }).catch(err => {
+        if (node != selected_node) return;
+        var p = document.createElement('p');
+        p.className = 'preview-message is-error';
+        p.textContent = 'Couldn\u2019t load the list of plugins. ' + err.message;
+        config_container.replaceChildren(p);
+    });
+}
+
+// Editor changes made to match the server, which shouldn't be sent back to it.
+var applying_server_changes = false;
+
+function choosePlugin(node, plugin, status) {
+    if (choosing) return;
+    choosing = true;
+    config_container.querySelectorAll('.plugin-button').forEach(b => b.disabled = true);
+    status.classList.remove('is-error');
+    status.textContent = 'Adding ' + plugin.name + '\u2026';
+
+    // Send only the edges whose other end the server knows about; edges to
+    // other new nodes are sent when those nodes get their plugins.
+    var neighbours = editorNeighbours(node.id);
+    var position = (dag_edit.toJSON().nodes || []).find(n => n.id == node.id) || {};
+    var body = {
+        id: node.id,
+        plugin: plugin.id,
+        x: position.x,
+        y: position.y,
+        parents: neighbours.parents.filter(id => server_nodes.has(id)),
+        children: neighbours.children.filter(id => server_nodes.has(id)),
+    };
+    fetch('node', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r => {
+        if (!r.ok) return r.text().then(t => { throw new Error(t || r.status + ' ' + r.statusText); });
+        return r.json();
+    }).then(json => {
+        choosing = false;
+        server_nodes.add(node.id);
+        needs_plugin.delete(node.id);
+        applyServerNode(json.node, json.edges);
+        if (node == selected_node) showNodeConfig(node);
+    }).catch(err => {
+        choosing = false;
+        if (node != selected_node) return;
+        config_container.querySelectorAll('.plugin-button').forEach(b => b.disabled = false);
+        status.classList.add('is-error');
+        status.textContent = 'Couldn\u2019t add ' + plugin.name + '. ' + err.message;
+    });
+}
+
+// Make the editor's node match the server's: its name (which the server
+// may have made unique), its ports, and the edges the server accepted.
+function applyServerNode(server_node, server_edges) {
+    applying_server_changes = true;
+    try {
+        var id = server_node.id;
+        dag_edit.setNodeLabel(id, server_node.label);
+        var node = dag_edit.getGraph().nodes.find(n => n.id == id);
+        if (!server_node.inputs.length) node.inputs.slice().forEach(p => dag_edit.removePort(id, 'input', p.id));
+        if (!server_node.outputs.length) node.outputs.slice().forEach(p => dag_edit.removePort(id, 'output', p.id));
+
+        var accepted = new Set(server_edges.map(e => e.fromNodeId + '/' + e.toNodeId));
+        dag_edit.getGraph().edges.forEach(e => {
+            if (e.fromNodeId != id && e.toNodeId != id) return;
+            var other = e.fromNodeId == id ? e.toNodeId : e.fromNodeId;
+            if (server_nodes.has(other) && !accepted.has(e.fromNodeId + '/' + e.toNodeId)) dag_edit.deleteEdge(e.id);
+        });
+    } finally {
+        applying_server_changes = false;
+    }
+}
+
+/* ── Selecting, configuring and connecting nodes ───────────────────── */
+
+function showNodeConfig(node) {
     if (config_edit) { config_edit.destroy(); config_edit = null; }
+    config_container.replaceChildren();
     config_subject.textContent = node.label || '';
     fetch('conf/' + node.id).then(response => {
             if (!response.ok) throw new Error('not okay');
@@ -215,16 +407,52 @@ dag_edit.onSelectNode = function(node) {
                     });
             });
     });
-    selected_node = node;
     loadPreview(node, 0);
+}
+
+dag_edit.onSelectNode = function(node) {
+    if (node == selected_node) return;
+    selected_node = node;
+    if (isPending(node.id)) {
+        if (config_edit) { config_edit.destroy(); config_edit = null; }
+        plugin_filter = '';
+        showPluginChooser(node);
+        preview.node = null;
+        preview.request++;
+        showPreviewMessage('Choose a plugin to preview this node\u2019s output.');
+    } else {
+        showNodeConfig(node);
+    }
 };
 
+// A node made in the editor needs a plugin before anything else, so on a
+// narrow screen show the settings pane, where the plugins are listed.
+dag_edit.onAddNode = function(node) {
+    if (isPending(node.id) && window.countessLayout) window.countessLayout.show('config');
+};
+
+// Re-list the plugins when the selected new node's connections change.
+function edgeChanged(edge) {
+    if (selected_node && isPending(selected_node.id) &&
+        (edge.fromNodeId == selected_node.id || edge.toNodeId == selected_node.id)) {
+        showPluginChooser(selected_node);
+    }
+}
+
 dag_edit.onAddEdge = function(edge) {
-    fetch('edge/' + edge.fromNodeId + '/' + edge.toNodeId + '/add', { method: 'POST' }).then(r => { if (!r.ok) throw new Error('not okay'); });
+    if (applying_server_changes) return;
+    if (server_nodes.has(edge.fromNodeId) && server_nodes.has(edge.toNodeId)) {
+        fetch('edge/' + edge.fromNodeId + '/' + edge.toNodeId + '/add', { method: 'POST' }).then(r => { if (!r.ok) throw new Error('not okay'); });
+    }
+    edgeChanged(edge);
 }
 
 dag_edit.onDeleteEdge = function(edge) {
-    fetch('edge/' + edge.fromNodeId + '/' + edge.toNodeId + '/del', { method: 'POST' }).then(r => { if (!r.ok) throw new Error('not okay'); });
+    if (applying_server_changes) return;
+    if (server_nodes.has(edge.fromNodeId) && server_nodes.has(edge.toNodeId)) {
+        fetch('edge/' + edge.fromNodeId + '/' + edge.toNodeId + '/del', { method: 'POST' }).then(r => { if (!r.ok) throw new Error('not okay'); });
+    }
+    edgeChanged(edge);
 }
 
 /* ── Shut the server down when the page closes ─────────────────────── */

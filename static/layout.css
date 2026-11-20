@@ -242,6 +242,60 @@ body.is-resizing-y, body.is-resizing-y * { cursor: row-resize !important; user-s
 .preview-message.is-error { color: #c62828; }
 @media (prefers-color-scheme: dark) { .preview-message.is-error { color: #ff7b72; } }
 
+/* ── Plugin chooser ────────────────────────────────────────────────── */
+
+.plugin-chooser { padding: 12px; max-width: 72ch; }
+
+.plugin-hint { margin: 0 0 10px; color: var(--muted); }
+.plugin-hint[hidden] { display: none; }
+
+.plugin-filter {
+  display: block;
+  width: 100%;
+  margin-bottom: 8px;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 5px 8px;
+}
+.plugin-filter:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+.plugin-list {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.plugin-list li[hidden] { display: none; }
+.plugin-list li:not([hidden]) ~ li:not([hidden]) { border-top: 1px solid var(--line); }
+/* no empty box when the filter hides everything */
+.plugin-list:not(:has(li:not([hidden]))) { display: none; }
+
+.plugin-button {
+  display: block;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.plugin-button:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.plugin-button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.plugin-button:disabled { cursor: progress; opacity: .6; }
+.plugin-name { display: block; font-weight: 600; }
+.plugin-desc { display: block; font-size: 13px; color: var(--muted); }
+
+.plugin-status { margin: 0; color: var(--muted); }
+.plugin-status:empty { display: none; }
+.plugin-status.is-error { color: #c62828; }
+@media (prefers-color-scheme: dark) { .plugin-status.is-error { color: #ff7b72; } }
+
 /* ── Preview pager ─────────────────────────────────────────────────────── */
 
 #view-container.is-loading { opacity: .55; transition: opacity .15s .1s; }
